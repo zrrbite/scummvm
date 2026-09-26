@@ -1,5 +1,13 @@
 # [ScummVM README](https://www.scummvm.org/) · [![Translation status](https://translations.scummvm.org/widgets/scummvm/-/scummvm/svg-badge.svg)](https://translations.scummvm.org/engage/scummvm/?utm_source=widget) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md#pull-requests)
 
+> **This fork: Eye of the Beholder — 5e Rules Mod.**
+> The `eob-5e-rules` branch adds an optional D&D 5th Edition ruleset to Eye of the Beholder I and II
+> (d20 + proficiency attacks with advantage, ability-based saves, death saves, short/long rests with
+> Hit Dice, cantrips and flexible spell slots, 5e level-ups with ASIs). It is off by default and lives
+> behind the "5th Edition rules (mod)" checkbox in the game's Engine options; stock behaviour is unchanged.
+> See [EOB-5E-MOD.md](EOB-5E-MOD.md) for what changes and where, and [TESTING.md](TESTING.md) for how to
+> build it and try it with your own game data.
+
 ## About ScummVM
 
 ScummVM allows you to play classic graphic point-and-click adventure games, text adventure games, and RPGs, as long as you already have the game data files. ScummVM replaces the executable files shipped with the games, which means you can now play your favorite games on all your favorite devices.
