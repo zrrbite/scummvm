@@ -120,6 +120,10 @@ protected:
 	bool cmdSaveOriginal(int argc, const char **argv);
 	bool cmdListMonsters(int argc, const char **argv);
 	bool cmdShowPosition(int argc, const char **argv);
+	bool cmdExportLevel(int argc, const char **argv);
+	bool cmdExportCampaign(int argc, const char **argv);
+	Common::String exportLevelJson();
+	bool writeExport(const Common::String &fileName, const Common::String &json);
 	bool cmdSetPosition(int argc, const char **argv);
 	bool cmdPrintMap(int argc, const char **argv);
 	bool cmdOpenDoor(int argc, const char **argv);

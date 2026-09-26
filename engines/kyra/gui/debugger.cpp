@@ -20,12 +20,14 @@
  */
 
 #include "kyra/gui/debugger.h"
+#include "common/file.h"
 #include "kyra/engine/kyra_lok.h"
 #include "kyra/engine/kyra_hof.h"
 #include "kyra/engine/timer.h"
 #include "kyra/resource/resource.h"
 #include "kyra/engine/lol.h"
 #include "kyra/engine/eobcommon.h"
+#include "kyra/script/script_eob.h"
 
 #include "common/system.h"
 #include "common/config-manager.h"
@@ -483,6 +485,8 @@ void Debugger_EoB::initialize() {
 	registerCmd("save_original", WRAP_METHOD(Debugger_EoB, cmdSaveOriginal));
 	registerCmd("list_monsters", WRAP_METHOD(Debugger_EoB, cmdListMonsters));
 	registerCmd("show_position", WRAP_METHOD(Debugger_EoB, cmdShowPosition));
+	registerCmd("export_level", WRAP_METHOD(Debugger_EoB, cmdExportLevel));
+	registerCmd("export_campaign", WRAP_METHOD(Debugger_EoB, cmdExportCampaign));
 	registerCmd("set_position", WRAP_METHOD(Debugger_EoB, cmdSetPosition));
 	registerCmd("print_map", WRAP_METHOD(Debugger_EoB, cmdPrintMap));
 	registerCmd("open_door", WRAP_METHOD(Debugger_EoB, cmdOpenDoor));
@@ -578,6 +582,130 @@ bool Debugger_EoB::cmdListMonsters(int, const char **) {
 
 	debugPrintf("\n");
 
+	return true;
+}
+
+// ---- Level exporter ------------------------------------------------------
+//
+// Dumps the currently loaded level to JSON so the campaign can be rebuilt in
+// another engine. Everything comes from the engine's own loaders, so the data
+// is exactly what the game plays.
+//
+// Layout of the JSON (all arrays are row-major, index = block = y * 32 + x):
+//   game, level, sub, wallset          - identification
+//   wallTypes[w]: {flags, special}     - per wall-type index: engine flags and special type
+//                                        flags bit 0 = passable, bit 3 = door; special 1 = door, 2 = ... (see scene_eob.cpp)
+//   cells[1024]: {w:[n,e,s,w], f, s}   - walls per side, trigger flags (f >> 3), script offset (s)
+//   items[]: {id, name, type, block, pos, value, flags, typeInfo}
+//   monsters[]: {index, type, block, pos, dir, hp, hpMax, flags, props}
+//   script: {commandMin, opcodes[], bytes(hex)}
+
+static void jsonEscape(Common::String &out, const char *str) {
+	for (const char *p = str; *p; ++p) {
+		if (*p == '"' || *p == '\\')
+			out += '\\';
+		if ((uint8)*p < 0x20)
+			out += ' ';
+		else
+			out += *p;
+	}
+}
+
+Common::String Debugger_EoB::exportLevelJson() {
+	EoBCoreEngine *vm = _vm;
+	Common::String j;
+	j += Common::String::format("{\n  \"game\": \"%s\",\n  \"level\": %d,\n  \"sub\": %d,\n  \"wallset\": \"%s\",\n  \"width\": 32,\n  \"height\": 32,\n",
+		vm->game() == GI_EOB1 ? "eob1" : "eob2", vm->_currentLevel, vm->_currentSub, vm->_curGfxFile.c_str());
+
+	int numWallTypes = vm->game() == GI_EOB1 ? 70 : 80;
+	j += "  \"wallTypes\": [";
+	for (int w = 0; w < numWallTypes; w++)
+		j += Common::String::format("%s{\"flags\": %d, \"special\": %d}", w ? ", " : "", vm->_wllWallFlags[w], vm->_specialWallTypes[w]);
+	j += "],\n";
+
+	j += "  \"cells\": [\n";
+	for (int b = 0; b < 1024; b++) {
+		const LevelBlockProperty &c = vm->_levelBlockProperties[b];
+		j += Common::String::format("    {\"w\": [%d, %d, %d, %d], \"f\": %d, \"s\": %d}%s\n",
+			c.walls[0], c.walls[1], c.walls[2], c.walls[3], c.flags, c.assignedObjects, b < 1023 ? "," : "");
+	}
+	j += "  ],\n";
+
+	j += "  \"items\": [\n";
+	bool first = true;
+	for (uint i = 1; i < vm->_items.size(); i++) {
+		const EoBItem &it = vm->_items[i];
+		if (it.block < 0 || it.level != vm->_currentLevel)
+			continue;
+		const EoBItemType &t = vm->_itemTypes[it.type];
+		Common::String name;
+		jsonEscape(name, vm->_itemNames[it.nameUnid]);
+		Common::String nameId;
+		jsonEscape(nameId, vm->_itemNames[it.nameId]);
+		j += Common::String::format("    %s{\"id\": %d, \"name\": \"%s\", \"nameIdentified\": \"%s\", \"type\": %d, \"block\": %d, \"pos\": %d, \"value\": %d, \"flags\": %d, \"icon\": %d, "
+			"\"typeInfo\": {\"ac\": %d, \"classes\": %d, \"hands\": %d, \"dmgS\": \"%dd%d%+d\", \"dmgL\": \"%dd%d%+d\", \"extra\": %d}}\n",
+			first ? "" : ",", i, name.c_str(), nameId.c_str(), it.type, it.block, it.pos, it.value, it.flags, it.icon,
+			t.armorClass, t.allowedClasses, t.requiredHands, t.dmgNumDiceS, t.dmgNumPipsS, t.dmgIncS, t.dmgNumDiceL, t.dmgNumPipsL, t.dmgIncL, t.extraProperties);
+		first = false;
+	}
+	j += "  ],\n";
+
+	j += "  \"monsters\": [\n";
+	first = true;
+	for (int i = 0; i < 30; i++) {
+		const EoBMonsterInPlay &m = vm->_monsters[i];
+		if (m.hitPointsCur <= 0 && !m.hitPointsMax)
+			continue;
+		const EoBMonsterProperty &p = vm->_monsterProps[m.type];
+		j += Common::String::format("    %s{\"index\": %d, \"type\": %d, \"block\": %d, \"pos\": %d, \"dir\": %d, \"hp\": %d, \"hpMax\": %d, \"flags\": %d, \"mode\": %d, "
+			"\"props\": {\"ac\": %d, \"thac0\": %d, \"level\": %d, \"hpDice\": \"%dd%d+%d\", \"attacks\": %d, \"dmg\": [\"%dd%d%+d\", \"%dd%d%+d\", \"%dd%d%+d\"], \"immunity\": %d, \"caps\": %u, \"typeFlags\": %u, \"xp\": %d}}\n",
+			first ? "" : ",", i, m.type, m.block, m.pos, m.dir, m.hitPointsCur, m.hitPointsMax, m.flags, m.mode,
+			p.armorClass, p.hitChance, p.level, p.hpDcTimes, p.hpDcPips, p.hpDcBase, p.attacksPerRound,
+			p.dmgDc[0].times, p.dmgDc[0].pips, p.dmgDc[0].base, p.dmgDc[1].times, p.dmgDc[1].pips, p.dmgDc[1].base, p.dmgDc[2].times, p.dmgDc[2].pips, p.dmgDc[2].base,
+			p.immunityFlags, p.capsFlags, p.typeFlags, p.experience);
+		first = false;
+	}
+	j += "  ],\n";
+
+	j += Common::String::format("  \"script\": {\n    \"commandMin\": %d,\n    \"opcodes\": [", vm->_inf->commandMin());
+	for (int i = 0; i < vm->_inf->numOpcodes(); i++)
+		j += Common::String::format("%s\"%s\"", i ? ", " : "", vm->_inf->opcodeName(i));
+	j += "],\n    \"bytes\": \"";
+	const uint8 *sd = (const uint8 *)vm->_inf->scriptData();
+	for (uint32 i = 0; i < vm->_inf->scriptSize(); i++)
+		j += Common::String::format("%02x", sd[i]);
+	j += "\"\n  }\n}\n";
+	return j;
+}
+
+bool Debugger_EoB::writeExport(const Common::String &fileName, const Common::String &json) {
+	Common::DumpFile f;
+	if (!f.open(Common::Path(fileName))) {
+		debugPrintf("Could not open %s for writing\n", fileName.c_str());
+		return false;
+	}
+	f.write(json.c_str(), json.size());
+	f.close();
+	debugPrintf("Wrote %s (%u bytes)\n", fileName.c_str(), (uint)json.size());
+	return true;
+}
+
+bool Debugger_EoB::cmdExportLevel(int argc, const char **argv) {
+	Common::String name = argc > 1 ? argv[1] : Common::String::format("%s_level%02d_sub%d.json", _vm->game() == GI_EOB1 ? "eob1" : "eob2", _vm->_currentLevel, _vm->_currentSub);
+	writeExport(name, exportLevelJson());
+	return true;
+}
+
+bool Debugger_EoB::cmdExportCampaign(int argc, const char **argv) {
+	int maxLevel = argc > 1 ? atoi(argv[1]) : (_vm->game() == GI_EOB1 ? 12 : 16);
+	int origLevel = _vm->_currentLevel, origSub = _vm->_currentSub;
+	debugPrintf("Exporting levels 1..%d. This loads every level in turn; do NOT save the game afterwards, reload instead.\n", maxLevel);
+	for (int l = 1; l <= maxLevel; l++) {
+		_vm->loadLevel(l, 0);
+		Common::String name = Common::String::format("%s_level%02d_sub0.json", _vm->game() == GI_EOB1 ? "eob1" : "eob2", l);
+		writeExport(name, exportLevelJson());
+	}
+	_vm->loadLevel(origLevel, origSub);
 	return true;
 }
 

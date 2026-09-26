@@ -49,6 +49,13 @@ public:
 	void saveState(Common::OutSaveFile *out, bool origFile = false);
 	void reset();
 
+	// Read-only access for the level exporter (debug console).
+	const int8 *scriptData() const { return _scriptData; }
+	uint32 scriptSize() const { return _scriptSize; }
+	int numOpcodes() const { return (int)_opcodes.size(); }
+	const char *opcodeName(int i) const { return _opcodes[i]->desc.c_str(); }
+	int commandMin() const { return _commandMin; }
+
 private:
 	const char *getString(uint16 index);
 
