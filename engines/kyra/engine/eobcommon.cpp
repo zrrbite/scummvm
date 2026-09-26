@@ -143,6 +143,8 @@ EoBCoreEngine::EoBCoreEngine(OSystem *system, const GameFlags &flags) : KyraRpgE
 	_configMouseBtSwap = false;
 	_configADDRuleEnhancements = false;
 	_config5eRules = false;
+	memset(_deathSaves5e, 0, sizeof(_deathSaves5e));
+	memset(_hitDice5e, 0, sizeof(_hitDice5e));
 	_configEnhancedReload = false;
 	_configNPCPatch = false;
 	_configAutomap = false;
@@ -761,6 +763,7 @@ void EoBCoreEngine::writeSettings() {
 }
 
 void EoBCoreEngine::startupNew() {
+	resetHitDice5e();
 	gui_setPlayFieldButtons();
 	_screen->_curPage = 0;
 	gui_drawPlayField(false);
@@ -1401,6 +1404,9 @@ void EoBCoreEngine::modifyCharacterHitpoints(int character, int16 points) {
 	c->hitPointsCur += points;
 	if (c->hitPointsCur > c->hitPointsMax)
 		c->hitPointsCur = c->hitPointsMax;
+
+	if (_config5eRules && points > 0)
+		reviveCheck5e(character);
 
 	gui_drawHitpoints(character);
 	gui_drawCharPortraitWithStats(character);
@@ -2445,8 +2451,30 @@ void EoBCoreEngine::inflictCharacterDamage(int charIndex, int damage) {
 	if (c->effectsRemainder[3])
 		c->effectsRemainder[3] = (damage < c->effectsRemainder[3]) ? (c->effectsRemainder[3] - damage) : 0;
 
+	if (_config5eRules && c->hitPointsCur <= 0 && damage > 0) {
+		// Already at 0 hp: damage does not reduce hp further, it costs a failed death save.
+		c->damageTaken = damage;
+		deathSaveFail5e(charIndex, 1);
+		if (_currentControlMode)
+			gui_drawFaceShape(charIndex);
+		else
+			gui_drawCharPortraitWithStats(charIndex);
+		setCharEventTimer(charIndex, 18, 6, 1);
+		return;
+	}
+
 	c->hitPointsCur -= damage;
 	c->damageTaken = damage;
+
+	if (_config5eRules && c->hitPointsCur <= 0 && c->hitPointsCur > -10) {
+		if (-c->hitPointsCur >= c->hitPointsMax) {
+			// Massive damage: instant death.
+			c->hitPointsCur = -10;
+		} else {
+			c->hitPointsCur = 0;
+			startDying5e(charIndex);
+		}
+	}
 
 	if (c->hitPointsCur > -10) {
 		snd_playSoundEffect(21);
@@ -2997,6 +3025,110 @@ int EoBCoreEngine::rollD20_5e(int advantage) {
 		return a;
 	int b = rollDice(1, 20);
 	return advantage > 0 ? MAX(a, b) : MIN(a, b);
+}
+
+void EoBCoreEngine::startDying5e(int charIndex) {
+	EoBCharacter *c = &_characters[charIndex];
+	_deathSaves5e[charIndex] = 0;
+	_txt->printMessage("%s falls unconscious and is dying!\r", -1, c->name);
+	// One death save per round (about 6 seconds).
+	setCharEventTimer(charIndex, 110, 13, 1);
+}
+
+void EoBCoreEngine::killCharacter5e(int charIndex) {
+	EoBCharacter *c = &_characters[charIndex];
+	c->hitPointsCur = -10;
+	c->flags &= 1;
+	c->food = 0;
+	_deathSaves5e[charIndex] = 0;
+	deleteCharEventTimer(charIndex, 13);
+	removeAllCharacterEffects(charIndex);
+	snd_playSoundEffect(_flags.platform == Common::kPlatformSegaCD ? 0x8001 + (c->raceSex & 1) : 22);
+	_txt->printMessage("%s has died.\r", -1, c->name);
+	gui_drawCharPortraitWithStats(charIndex);
+}
+
+void EoBCoreEngine::deathSaveFail5e(int charIndex, int count) {
+	uint8 &ds = _deathSaves5e[charIndex];
+	// Taking damage while stable makes the character unstable again.
+	if (ds & 0x80) {
+		ds &= 0x7F;
+		setCharEventTimer(charIndex, 110, 13, 1);
+	}
+	int fails = (ds & 0x0F) + count;
+	ds = (ds & 0xF0) | MIN(fails, 15);
+	if (fails >= 3) {
+		killCharacter5e(charIndex);
+		return;
+	}
+	_txt->printMessage("%s slips closer to death (%d of 3).\r", -1, _characters[charIndex].name, fails);
+}
+
+void EoBCoreEngine::deathSaveTick5e(int charIndex) {
+	EoBCharacter *c = &_characters[charIndex];
+	if (!_config5eRules || !(c->flags & 1) || c->hitPointsCur > 0 || c->hitPointsCur <= -10)
+		return;
+	uint8 &ds = _deathSaves5e[charIndex];
+	if (ds & 0x80)
+		return;
+
+	int r = rollDice(1, 20);
+	debugC(2, kDebugLevelMain, "5e death save for %d: %d", charIndex, r);
+
+	if (r == 20) {
+		c->hitPointsCur = 1;
+		ds = 0;
+		_txt->printMessage("%s regains consciousness!\r", -1, c->name);
+		gui_drawCharPortraitWithStats(charIndex);
+		return;
+	}
+
+	if (r >= 10) {
+		int succ = ((ds >> 4) & 0x07) + 1;
+		ds = (ds & 0x0F) | (succ << 4);
+		if (succ >= 3) {
+			ds |= 0x80;
+			_txt->printMessage("%s is stable.\r", -1, c->name);
+			return;
+		}
+		_txt->printMessage("%s clings to life (%d of 3).\r", -1, c->name, succ);
+	} else {
+		deathSaveFail5e(charIndex, r == 1 ? 2 : 1);
+		if (c->hitPointsCur <= -10)
+			return;
+	}
+	setCharEventTimer(charIndex, 110, 13, 1);
+}
+
+void EoBCoreEngine::reviveCheck5e(int charIndex) {
+	EoBCharacter *c = &_characters[charIndex];
+	if (c->hitPointsCur > 0) {
+		_deathSaves5e[charIndex] = 0;
+		deleteCharEventTimer(charIndex, 13);
+	}
+}
+
+int EoBCoreEngine::hitDieSize5e(int cClass) const {
+	// Primary class via the THAC0 table: 0 fighter types d10, 1 mage d6, 2 cleric d8, 3 thief d8.
+	static const int8 dice[] = { 10, 6, 8, 8 };
+	return dice[_charClassModifier[cClass] & 3];
+}
+
+void EoBCoreEngine::resetHitDice5e() {
+	for (int i = 0; i < 6; i++)
+		_hitDice5e[i] = MAX<uint8>(_characters[i].level[0], 1);
+}
+
+int EoBCoreEngine::spendHitDie5e(int charIndex) {
+	EoBCharacter *c = &_characters[charIndex];
+	if (!_hitDice5e[charIndex] || c->hitPointsCur >= c->hitPointsMax)
+		return 0;
+	_hitDice5e[charIndex]--;
+	int heal = MAX(rollDice(1, hitDieSize5e(c->cClass)) + abilityMod5e(c->constitutionCur), 1);
+	int before = c->hitPointsCur;
+	c->hitPointsCur = MIN<int16>(c->hitPointsCur + heal, c->hitPointsMax);
+	reviveCheck5e(charIndex);
+	return c->hitPointsCur - before;
 }
 
 bool EoBCoreEngine::isSaveProficient5e(int cClass, int ability) const {

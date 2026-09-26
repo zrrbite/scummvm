@@ -358,6 +358,10 @@ void EoBCoreEngine::timerSpecialCharacterUpdate(int timerNum) {
 			}
 			break;
 
+		case 13:
+			deathSaveTick5e(charIndex);
+			break;
+
 		case 12:
 			c->effectFlags &= ~0x1000;
 			if (_characterStatusStrings12)

@@ -869,6 +869,20 @@ protected:
 	int profBonus5e(int level) const;
 	int rollD20_5e(int advantage);  // advantage: <0 disadvantage, 0 normal, >0 advantage
 	bool isSaveProficient5e(int cClass, int ability) const;
+	// Death saves: a character at 0 hp rolls d20 each round (timer event 13).
+	// State is per session (not stored in savegames): low nibble = failures,
+	// high nibble = successes, 0x80 = stable.
+	uint8 _deathSaves5e[6];
+	void startDying5e(int charIndex);
+	void deathSaveTick5e(int charIndex);
+	void deathSaveFail5e(int charIndex, int count);
+	void killCharacter5e(int charIndex);
+	void reviveCheck5e(int charIndex);
+	// Hit dice for short rests (per session): remaining dice per character.
+	uint8 _hitDice5e[6];
+	int hitDieSize5e(int cClass) const;
+	void resetHitDice5e();
+	int spendHitDie5e(int charIndex);
 	bool _configEnhancedReload;
 	bool _configNPCPatch;
 	bool _configAutomap; // non-original: in-game automap overlay enabled (opt-out)

@@ -340,6 +340,18 @@ Common::Error EoBCoreEngine::loadGameState(int slot) {
 
 	restartPlayTimerAt(header.totalPlaySecs);
 
+	// 5e mod: per-session state. Anyone loaded at 0 hp starts dying afresh.
+	resetHitDice5e();
+	memset(_deathSaves5e, 0, sizeof(_deathSaves5e));
+	if (_config5eRules) {
+		for (int i = 0; i < 6; i++) {
+			if (testCharacter(i, 1) && _characters[i].hitPointsCur <= 0 && _characters[i].hitPointsCur > -10) {
+				_characters[i].hitPointsCur = 0;
+				setCharEventTimer(i, 110, 13, 1);
+			}
+		}
+	}
+
 	_loading = false;
 	removeInputTop();
 

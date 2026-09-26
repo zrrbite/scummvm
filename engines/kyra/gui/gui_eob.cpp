@@ -4191,6 +4191,20 @@ bool GUI_EoB::restParty() {
 				_vm->delayWithTicks(5);
 			}
 
+			// 5e mod: short rest — each hour, injured characters spend Hit Dice.
+			if (_vm->_config5eRules) {
+				for (int i = 0; i < 6; i++) {
+					if (!_vm->testCharacter(i, 3) || !_vm->_characters[i].food)
+						continue;
+					int healed = _vm->spendHitDie5e(i);
+					if (healed > 0) {
+						_vm->_txt->printMessage(Common::String::format("%s spends a Hit Die and recovers %d hp.\r", _vm->_characters[i].name, healed).c_str());
+						_vm->gui_drawCharPortraitWithStats(i);
+						_vm->delay(80);
+					}
+				}
+			}
+
 			if (!(hours % 8)) {
 				bool starving = false;
 				for (int i = 0; i < 6; i++) {
@@ -4215,7 +4229,16 @@ bool GUI_EoB::restParty() {
 
 					// Update hitpoints and food status
 					if (_vm->_characters[i].food) {
-						if (_vm->_characters[i].hitPointsCur < _vm->_characters[i].hitPointsMax) {
+						if (_vm->_config5eRules) {
+							// 5e long rest: full hp, half the Hit Dice come back.
+							if (_vm->_characters[i].hitPointsCur < _vm->_characters[i].hitPointsMax) {
+								_vm->_characters[i].hitPointsCur = _vm->_characters[i].hitPointsMax;
+								_vm->reviveCheck5e(i);
+								_vm->gui_drawCharPortraitWithStats(i);
+							}
+							int lvl = MAX<int>(_vm->_characters[i].level[0], 1);
+							_vm->_hitDice5e[i] = MIN<int>(lvl, _vm->_hitDice5e[i] + MAX(lvl / 2, 1));
+						} else if (_vm->_characters[i].hitPointsCur < _vm->_characters[i].hitPointsMax) {
 							_vm->_characters[i].hitPointsCur++;
 							_vm->gui_drawCharPortraitWithStats(i);
 						}
