@@ -1651,6 +1651,14 @@ void EoBCoreEngine::increaseCharacterLevel(int charIndex, int levelIndex) {
 
 	_characters[charIndex].level[levelIndex]++;
 
+	if (_config5eRules) {
+		levelUp5e(charIndex, levelIndex, numSubclasses);
+		gui_drawCharPortraitWithStats(charIndex);
+		_txt->printMessage(_levelGainStrings[0], -1, _characters[charIndex].name);
+		snd_playSoundEffect(_flags.platform == Common::kPlatformSegaCD ? 0x1017 : 0x17);
+		return;
+	}
+
 	int hitDieRoll = shouldRollHitDieAtCurrentLevel(charIndex, levelIndex) ? rollHitDie(charIndex, levelIndex) : 0;
 
 	_characters[charIndex].hitPointsDividend += incrCharacterHitPointsDividendByLevel(charIndex, levelIndex, hitDieRoll);
@@ -3129,6 +3137,64 @@ int EoBCoreEngine::spendHitDie5e(int charIndex) {
 	c->hitPointsCur = MIN<int16>(c->hitPointsCur + heal, c->hitPointsMax);
 	reviveCheck5e(charIndex);
 	return c->hitPointsCur - before;
+}
+
+void EoBCoreEngine::levelUp5e(int charIndex, int levelIndex, int numSubclasses) {
+	EoBCharacter *c = &_characters[charIndex];
+	// 5e hit dice by class type: 0 fighter d10, 1 wizard d6, 2 cleric d8, 3 rogue d8, 4 paladin d10, 5 ranger d10.
+	// Fixed average per level (the common 5e table choice), plus CON modifier, min 1.
+	static const int8 avgHp[] = { 6, 4, 5, 5, 6, 6 };
+	int ct = getCharacterClassType(c->cClass, levelIndex);
+	int gain = (ct >= 0 ? avgHp[ct] : 1) + abilityMod5e(c->constitutionCur);
+	if (gain < 1)
+		gain = 1;
+
+	// Multiclass characters level each class in parallel, so each class contributes
+	// its share via the same dividend mechanism the "faithful rules" option uses.
+	if (c->hitPointsDividend == 0)
+		c->hitPointsDividend = c->hitPointsMax * numSubclasses;
+	c->hitPointsDividend += gain;
+	int hpNew = c->hitPointsDividend / numSubclasses;
+	c->hitPointsCur += hpNew - c->hitPointsMax;
+	c->hitPointsMax = hpNew;
+	debugC(1, kDebugLevelMain, "5e level up: class type %d, +%d hp (dividend), max now %d", ct, gain, hpNew);
+
+	// One more Hit Die for short rests.
+	if (levelIndex == 0 && _hitDice5e[charIndex] < 20)
+		_hitDice5e[charIndex]++;
+
+	// Ability Score Improvement at levels 4, 8, 12, 16: +2 to the primary ability (cap 18),
+	// spilling into Constitution when the primary is already maxed.
+	int lvl = c->level[levelIndex];
+	if (levelIndex == 0 && lvl >= 4 && (lvl % 4) == 0) {
+		int8 *primary;
+		const char *abilityName;
+		switch (ct) {
+		case 1:  primary = &c->intelligenceCur; abilityName = "Intelligence"; break;
+		case 2:  primary = &c->wisdomCur;       abilityName = "Wisdom"; break;
+		case 3:  primary = &c->dexterityCur;    abilityName = "Dexterity"; break;
+		default: primary = &c->strengthCur;     abilityName = "Strength"; break;
+		}
+		int8 *maxField = 0;
+		switch (ct) {
+		case 1:  maxField = &c->intelligenceMax; break;
+		case 2:  maxField = &c->wisdomMax; break;
+		case 3:  maxField = &c->dexterityMax; break;
+		default: maxField = &c->strengthMax; break;
+		}
+		int8 *target = primary, *targetMax = maxField;
+		if (*primary >= 18) {
+			target = &c->constitutionCur;
+			targetMax = &c->constitutionMax;
+			abilityName = "Constitution";
+		}
+		if (*target < 18) {
+			*target = MIN<int8>(*target + 2, 18);
+			if (*targetMax < *target)
+				*targetMax = *target;
+			_txt->printMessage("%s's %s rises to %d.\r", -1, c->name, abilityName, (int)*target);
+		}
+	}
 }
 
 bool EoBCoreEngine::isSaveProficient5e(int cClass, int ability) const {
