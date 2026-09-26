@@ -883,6 +883,7 @@ protected:
 	int hitDieSize5e(int cClass) const;
 	void resetHitDice5e();
 	int spendHitDie5e(int charIndex);
+	bool isCantrip5e(int spell) const;
 	bool _configEnhancedReload;
 	bool _configNPCPatch;
 	bool _configAutomap; // non-original: in-game automap overlay enabled (opt-out)

@@ -199,7 +199,49 @@ void EoBCoreEngine::castSpell(int spell, int weaponSlot) {
 	}
 
 	if (!(_flags.gameID == GI_EOB2 && _activeSpell == 62)) {
-		if (!_castScrollSlot) {
+		if (!_castScrollSlot && _config5eRules && isCantrip5e(spell)) {
+			// 5e cantrip: cast at will, nothing is expended.
+		} else if (!_castScrollSlot && _config5eRules) {
+			// 5e flexible slots: the prepared spell stays in the book; one prepared entry of this
+			// level is expended instead. Prefer a duplicate of the same spell, otherwise the last
+			// other prepared spell of this level, otherwise this entry itself (last slot).
+			int8 *lvl = &_openBookAvailableSpells[_openBookSpellLevel * 10];
+			int sel = _openBookSpellListOffset + _openBookSpellSelectedItem;
+			int8 tmp = lvl[sel];
+			int copies = 0, lastOther = -1;
+			for (int i = 0; i < 8; i++) {
+				if (lvl[i] == tmp)
+					copies++;
+				else if (lvl[i] > 0)
+					lastOther = i;
+			}
+			int consume = (copies >= 2 || lastOther == -1) ? sel : lastOther;
+			int8 spent = lvl[consume];
+			if (consume < 8)
+				memmove(&lvl[consume], &lvl[consume + 1], 8 - consume);
+			lvl[8] = -spent;
+			// Re-select the spell we just cast if it is still prepared.
+			int idx = -1;
+			for (int i = 0; i < 8; i++) {
+				if (lvl[i] == tmp) {
+					idx = i;
+					break;
+				}
+			}
+			if (idx == -1) {
+				idx = 0;
+				while (idx < 8 && lvl[idx] > 0)
+					idx++;
+				idx = MAX(idx - 1, 0);
+			}
+			if (idx < 6) {
+				_openBookSpellListOffset = 0;
+				_openBookSpellSelectedItem = idx;
+			} else {
+				_openBookSpellListOffset = 6;
+				_openBookSpellSelectedItem = idx - 6;
+			}
+		} else if (!_castScrollSlot) {
 			int8 tmp = _openBookAvailableSpells[_openBookSpellLevel * 10 + _openBookSpellListOffset + _openBookSpellSelectedItem];
 			if (_openBookSpellListOffset + _openBookSpellSelectedItem < 8)
 				memmove(&_openBookAvailableSpells[_openBookSpellLevel * 10 + _openBookSpellListOffset + _openBookSpellSelectedItem], &_openBookAvailableSpells[_openBookSpellLevel * 10 + _openBookSpellListOffset + _openBookSpellSelectedItem + 1], 8 - (_openBookSpellListOffset + _openBookSpellSelectedItem));
@@ -800,6 +842,11 @@ int EoBCoreEngine::findNextCharacterSpellTarget(int curCharIndex) {
 			return curCharIndex;
 	}
 	return -1;
+}
+
+bool EoBCoreEngine::isCantrip5e(int spell) const {
+	// Magic Missile (id 4 in both games) plays the role of the 5e attack cantrip.
+	return spell == 4;
 }
 
 int EoBCoreEngine::charDeathSavingThrow(int charIndex, int div) {
