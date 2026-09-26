@@ -170,6 +170,23 @@ const ADExtraGuiOptionsMap gameGuiOptions[] = {
 	},
 
 	{
+		GAMEOPTION_EOB_RULES5E,
+		{
+			_s("5th Edition rules (mod)"),
+			_s(
+				"- Attack rolls: d20 + proficiency + ability modifier vs. ascending AC\n"
+				"- Advantage when striking a monster from behind or while invisible\n"
+				"- Disadvantage for monsters attacking blurred/protected characters\n"
+				"- Saving throws: d20 + ability modifier (+ proficiency by class) vs. DC"
+			),
+			"rules5e",
+			false,
+			0,
+			0
+		}
+	},
+
+	{
 		GAMEOPTION_EOB_NPCPATCH,
 		{
 			_s("Fix Ileria and Beohram NPCs"),

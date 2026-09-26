@@ -862,6 +862,13 @@ protected:
 	bool _configHpBarGraphs;
 	bool _configMouseBtSwap;
 	bool _configADDRuleEnhancements;
+	// 5e ruleset (non-original): d20 + proficiency + ability mod vs ascending AC,
+	// advantage/disadvantage, ability-based saving throws with class proficiencies.
+	bool _config5eRules;
+	int abilityMod5e(int score) const;
+	int profBonus5e(int level) const;
+	int rollD20_5e(int advantage);  // advantage: <0 disadvantage, 0 normal, >0 advantage
+	bool isSaveProficient5e(int cClass, int ability) const;
 	bool _configEnhancedReload;
 	bool _configNPCPatch;
 	bool _configAutomap; // non-original: in-game automap overlay enabled (opt-out)

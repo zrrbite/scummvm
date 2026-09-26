@@ -142,6 +142,7 @@ EoBCoreEngine::EoBCoreEngine(OSystem *system, const GameFlags &flags) : KyraRpgE
 	_configHpBarGraphs = true;
 	_configMouseBtSwap = false;
 	_configADDRuleEnhancements = false;
+	_config5eRules = false;
 	_configEnhancedReload = false;
 	_configNPCPatch = false;
 	_configAutomap = false;
@@ -708,6 +709,7 @@ void EoBCoreEngine::registerDefaultSettings() {
 	ConfMan.registerDefault("hpbargraphs", true);
 	ConfMan.registerDefault("mousebtswap", false);
 	ConfMan.registerDefault("addrules", false);
+	ConfMan.registerDefault("rules5e", false);
 	ConfMan.registerDefault("mreload", false);
 	ConfMan.registerDefault("importOrigSaves", true);
 	if (_flags.gameID == GI_EOB1)
@@ -719,6 +721,7 @@ void EoBCoreEngine::readSettings() {
 	_configHpBarGraphs = ConfMan.getBool("hpbargraphs");
 	_configMouseBtSwap = ConfMan.getBool("mousebtswap");
 	_configADDRuleEnhancements = ConfMan.getBool("addrules");
+	_config5eRules = ConfMan.getBool("rules5e");
 	_configEnhancedReload = ConfMan.getBool("mreload");
 	_configNPCPatch = (_flags.gameID == GI_EOB1) ? ConfMan.getBool("npcpatch") : false;
 	_configAutomap = ConfMan.getBool("automap");
@@ -735,6 +738,7 @@ void EoBCoreEngine::writeSettings() {
 	ConfMan.setBool("hpbargraphs", _configHpBarGraphs);
 	ConfMan.setBool("mousebtswap", _configMouseBtSwap);
 	ConfMan.setBool("addrules", _configADDRuleEnhancements);
+	ConfMan.setBool("rules5e", _config5eRules);
 	ConfMan.setBool("mreload", _configEnhancedReload);
 	if (_flags.gameID == GI_EOB1)
 		ConfMan.setBool("npcpatch", _configNPCPatch);
@@ -2512,6 +2516,35 @@ bool EoBCoreEngine::characterAttackHitTest(int charIndex, int monsterIndex, int 
 		}
 	}
 
+	if (_config5eRules) {
+		// 5e: d20 + proficiency + ability modifier (+ magic weapon bonus) vs. ascending AC.
+		// AD&D descending AC is converted as AC5e = 20 - AC (AC 10 -> 10, AC 0 -> 20).
+		const EoBCharacter *c = &_characters[charIndex];
+		int abil = attackType ? abilityMod5e(c->strengthCur) : abilityMod5e(c->dexterityCur);
+		int bonus = profBonus5e(c->level[0]) + abil + d;
+		int targetAC = 20 - _monsterProps[t].armorClass;
+
+		int adv = 0;
+		// Attacking a monster that faces away from the party: advantage.
+		if (_monsters[monsterIndex].dir == _currentDirection)
+			adv++;
+		// Attacker is invisible: advantage.
+		if ((_flags.gameID == GI_EOB1 && (c->effectFlags & 0x40)) || (_flags.gameID == GI_EOB2 && (c->effectFlags & 0x1000)))
+			adv++;
+		if (_configADDRuleEnhancements && isElf(charIndex) && (isSword(item) || isBow(projectileWeapon)))
+			bonus++;
+
+		int roll = rollD20_5e(adv);
+		_monsters[monsterIndex].flags |= 1;
+
+		if (roll == 20)
+			return true;
+		if (roll == 1)
+			return false;
+		debugC(2, kDebugLevelMain, "5e attack: d20=%d +%d vs AC %d", roll, bonus, targetAC);
+		return (roll + bonus) >= targetAC;
+	}
+
 	d += attackType ? getStrHitChanceModifier(charIndex) : getDexHitChanceModifier(charIndex);
 
 	int m = getMonsterAcHitChanceModifier(charIndex, _monsterProps[t].armorClass) - d;
@@ -2547,6 +2580,28 @@ bool EoBCoreEngine::characterAttackHitTest(int charIndex, int monsterIndex, int 
 bool EoBCoreEngine::monsterAttackHitTest(EoBMonsterInPlay *m, int charIndex) {
 	int tp = m->type;
 	EoBMonsterProperty *p = &_monsterProps[tp];
+
+	if (_config5eRules) {
+		// Monster THAC0 -> attack bonus (20 - THAC0); character AC -> ascending (20 - AC).
+		int bonus = 20 - p->hitChance;
+		int targetAC = 20 - _characters[charIndex].armorClass;
+		int adv = 0;
+		// Protection from evil / blur: disadvantage instead of the old flat -2.
+		if (_characters[charIndex].effectFlags & 0x800)
+			adv--;
+		if (_characters[charIndex].effectFlags & 0x10)
+			adv--;
+		// Prayer: works like a 5e Bless on AC, -1d4 to the enemy's roll.
+		if (_partyEffectFlags & 0x8000)
+			bonus -= rollDice(1, 4);
+
+		int roll = rollD20_5e(adv);
+		if (roll == 20)
+			return true;
+		if (roll == 1)
+			return false;
+		return (roll + bonus) >= targetAC;
+	}
 
 	int r = rollDice(1, 20);
 	if (r != 20) {
@@ -2783,6 +2838,40 @@ bool EoBCoreEngine::trySavingThrow(void *target, int hpModifier, int level, int 
 	if (type == 5)
 		return false;
 
+	if (_config5eRules) {
+		// Map the AD&D save categories onto 5e abilities:
+		// 0 paralysis/poison/death -> CON, 1 rod/staff/wand -> DEX,
+		// 2 petrification/polymorph -> CON, 3 breath weapon -> DEX, 4 spell -> WIS
+		static const int8 saveAbility[] = { 2, 1, 2, 1, 4 };
+		int ability = saveAbility[CLIP(type, 0, 4)];
+
+		if (race == 6) {
+			// Monster saving throw against a party spell: d20 + level/2 vs the party's spell DC.
+			int partyLevel = 1;
+			for (int i = 0; i < 6; i++) {
+				if (testCharacter(i, 1) && _characters[i].level[0] > partyLevel)
+					partyLevel = _characters[i].level[0];
+			}
+			int dc = 8 + profBonus5e(partyLevel) + 3;
+			int roll = rollD20_5e(0);
+			return (roll + level / 2) >= dc;
+		}
+
+		const EoBCharacter *c = (const EoBCharacter *)target;
+		static const int8 *const scores[] = { &c->strengthCur, &c->dexterityCur, &c->constitutionCur, &c->intelligenceCur, &c->wisdomCur, &c->charismaCur };
+		int bonus = abilityMod5e(*scores[ability]);
+		if (isSaveProficient5e(c->cClass, ability))
+			bonus += profBonus5e(level);
+		// Dwarves/gnomes/halflings keep their traditional resilience against poison and magic.
+		if (((race == 3 || race == 5) && (type == 4 || type == 1 || type == 0)) || (race == 4 && (type == 4 || type == 1)))
+			bonus += 1;
+		// Difficulty scales gently with dungeon depth.
+		int dc = 12 + _currentLevel / 4;
+		int roll = rollD20_5e(0);
+		debugC(2, kDebugLevelMain, "5e save: d20=%d +%d vs DC %d", roll, bonus, dc);
+		return (roll + bonus) >= dc;
+	}
+
 	int s = getSaveThrowModifier(hpModifier, level, type);
 	if (((race == 3 || race == 5) && (type == 4 || type == 1 || type == 0)) || (race == 4 && (type == 4 || type == 1))) {
 		EoBCharacter *c = (EoBCharacter *)target;
@@ -2887,6 +2976,53 @@ int EoBCoreEngine::getMonsterAcHitChanceModifier(int charIndex, int monsterAc) {
 	int cm = _charClassModifier[_characters[charIndex].cClass];
 
 	return (20 - ((l / _monsterAcHitChanceTable1[cm]) * _monsterAcHitChanceTable2[cm])) - monsterAc;
+}
+
+// ---- 5e ruleset helpers (non-original) ----
+
+int EoBCoreEngine::abilityMod5e(int score) const {
+	// floor((score - 10) / 2); arithmetic shift gives the floor for negatives.
+	return (score - 10) >> 1;
+}
+
+int EoBCoreEngine::profBonus5e(int level) const {
+	if (level < 1)
+		level = 1;
+	return 2 + (level - 1) / 4;
+}
+
+int EoBCoreEngine::rollD20_5e(int advantage) {
+	int a = rollDice(1, 20);
+	if (advantage == 0)
+		return a;
+	int b = rollDice(1, 20);
+	return advantage > 0 ? MAX(a, b) : MIN(a, b);
+}
+
+bool EoBCoreEngine::isSaveProficient5e(int cClass, int ability) const {
+	// Bitmask of proficient saves per EOB class index, bits: 1 STR, 2 DEX, 4 CON, 8 INT, 16 WIS, 32 CHA.
+	// 5e: Fighter STR/CON, Ranger STR/DEX, Paladin WIS/CHA, Wizard INT/WIS, Cleric WIS/CHA, Rogue DEX/INT.
+	// Multiclass characters get the union of their classes' proficiencies.
+	static const uint8 profMask[] = {
+		1 | 4,                 //  0 Fighter
+		1 | 2,                 //  1 Ranger
+		16 | 32,               //  2 Paladin
+		8 | 16,                //  3 Mage
+		16 | 32,               //  4 Cleric
+		2 | 8,                 //  5 Thief
+		1 | 4 | 16 | 32,       //  6 Fighter/Cleric
+		1 | 4 | 2 | 8,         //  7 Fighter/Thief
+		1 | 4 | 8 | 16,        //  8 Fighter/Mage
+		1 | 4 | 8 | 16 | 2,    //  9 Fighter/Mage/Thief
+		2 | 8 | 16,            // 10 Thief/Mage
+		16 | 32 | 2 | 8,       // 11 Cleric/Thief
+		1 | 4 | 16 | 32 | 8,   // 12 Fighter/Cleric/Mage
+		1 | 2 | 16 | 32,       // 13 Ranger/Cleric
+		16 | 32 | 8            // 14 Cleric/Mage
+	};
+	if (cClass < 0 || cClass >= (int)ARRAYSIZE(profMask))
+		return false;
+	return (profMask[cClass] & (1 << ability)) != 0;
 }
 
 void EoBCoreEngine::explodeMonster(EoBMonsterInPlay *m) {
