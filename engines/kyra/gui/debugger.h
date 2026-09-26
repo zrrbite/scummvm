@@ -120,6 +120,11 @@ protected:
 	bool cmdSaveOriginal(int argc, const char **argv);
 	bool cmdListMonsters(int argc, const char **argv);
 	bool cmdShowPosition(int argc, const char **argv);
+	// 5e mod test helpers
+	bool cmdSetHp(int argc, const char **argv);
+	bool cmdDamage(int argc, const char **argv);
+	bool cmdGiveXp(int argc, const char **argv);
+	bool cmdShow5e(int argc, const char **argv);
 	bool cmdSetPosition(int argc, const char **argv);
 	bool cmdPrintMap(int argc, const char **argv);
 	bool cmdOpenDoor(int argc, const char **argv);

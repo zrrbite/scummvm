@@ -483,6 +483,10 @@ void Debugger_EoB::initialize() {
 	registerCmd("save_original", WRAP_METHOD(Debugger_EoB, cmdSaveOriginal));
 	registerCmd("list_monsters", WRAP_METHOD(Debugger_EoB, cmdListMonsters));
 	registerCmd("show_position", WRAP_METHOD(Debugger_EoB, cmdShowPosition));
+	registerCmd("set_hp", WRAP_METHOD(Debugger_EoB, cmdSetHp));
+	registerCmd("damage", WRAP_METHOD(Debugger_EoB, cmdDamage));
+	registerCmd("give_xp", WRAP_METHOD(Debugger_EoB, cmdGiveXp));
+	registerCmd("show_5e", WRAP_METHOD(Debugger_EoB, cmdShow5e));
 	registerCmd("set_position", WRAP_METHOD(Debugger_EoB, cmdSetPosition));
 	registerCmd("print_map", WRAP_METHOD(Debugger_EoB, cmdPrintMap));
 	registerCmd("open_door", WRAP_METHOD(Debugger_EoB, cmdOpenDoor));
@@ -578,6 +582,61 @@ bool Debugger_EoB::cmdListMonsters(int, const char **) {
 
 	debugPrintf("\n");
 
+	return true;
+}
+
+bool Debugger_EoB::cmdSetHp(int argc, const char **argv) {
+	if (argc != 3) {
+		debugPrintf("Usage: set_hp <character 0-5> <hp>\n");
+		return true;
+	}
+	int c = atoi(argv[1]);
+	if (c < 0 || c > 5)
+		return true;
+	_vm->_characters[c].hitPointsCur = atoi(argv[2]);
+	_vm->gui_drawCharPortraitWithStats(c);
+	debugPrintf("%s: %d/%d hp\n", _vm->_characters[c].name, _vm->_characters[c].hitPointsCur, _vm->_characters[c].hitPointsMax);
+	return true;
+}
+
+bool Debugger_EoB::cmdDamage(int argc, const char **argv) {
+	if (argc != 3) {
+		debugPrintf("Usage: damage <character 0-5> <amount>   (goes through inflictCharacterDamage, so 5e death saves apply)\n");
+		return true;
+	}
+	int c = atoi(argv[1]);
+	if (c < 0 || c > 5)
+		return true;
+	_vm->inflictCharacterDamage(c, atoi(argv[2]));
+	debugPrintf("%s: %d/%d hp\n", _vm->_characters[c].name, _vm->_characters[c].hitPointsCur, _vm->_characters[c].hitPointsMax);
+	return true;
+}
+
+bool Debugger_EoB::cmdGiveXp(int argc, const char **argv) {
+	if (argc != 3) {
+		debugPrintf("Usage: give_xp <character 0-5> <points>\n");
+		return true;
+	}
+	int c = atoi(argv[1]);
+	if (c < 0 || c > 5)
+		return true;
+	_vm->increaseCharacterExperience(c, atoi(argv[2]));
+	debugPrintf("%s: level %d/%d/%d, %d/%d hp\n", _vm->_characters[c].name, _vm->_characters[c].level[0], _vm->_characters[c].level[1], _vm->_characters[c].level[2], _vm->_characters[c].hitPointsCur, _vm->_characters[c].hitPointsMax);
+	return true;
+}
+
+bool Debugger_EoB::cmdShow5e(int, const char **) {
+	debugPrintf("5e rules: %s\n", _vm->_config5eRules ? "ON" : "off");
+	for (int i = 0; i < 6; i++) {
+		if (!_vm->testCharacter(i, 1))
+			continue;
+		const EoBCharacter *c = &_vm->_characters[i];
+		uint8 ds = _vm->_deathSaves5e[i];
+		debugPrintf("%d %-12s lvl %2d  hp %3d/%3d  AC %3d (5e %2d)  prof +%d  STR %2d DEX %2d CON %2d INT %2d WIS %2d  hit dice %d  death saves: %d ok / %d fail%s\n",
+			i, c->name, c->level[0], c->hitPointsCur, c->hitPointsMax, c->armorClass, 20 - c->armorClass, _vm->profBonus5e(c->level[0]),
+			c->strengthCur, c->dexterityCur, c->constitutionCur, c->intelligenceCur, c->wisdomCur,
+			_vm->_hitDice5e[i], (ds >> 4) & 7, ds & 0x0F, (ds & 0x80) ? " (stable)" : "");
+	}
 	return true;
 }
 
